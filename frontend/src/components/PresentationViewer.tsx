@@ -539,7 +539,23 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
                 </div>
               ) : (
                 /* CARDS MODE: Render styled slide core card (manual/ai/parsed-pptx) */
-                <div className={`flex-1 p-8 md:p-12 bg-gradient-to-tr ${currentSlide?.gradient || 'from-indigo-600 to-violet-600'} flex flex-col justify-between transition-all duration-500 relative`}>
+                <div 
+                  className={`flex-1 p-8 md:p-12 flex flex-col justify-between transition-all duration-500 relative ${
+                    currentSlide?.gradient?.startsWith('url(') 
+                      ? 'bg-slate-950' 
+                      : `bg-gradient-to-tr ${currentSlide?.gradient || 'from-indigo-600 to-violet-600'}`
+                  }`}
+                  style={
+                    currentSlide?.gradient?.startsWith('url(')
+                      ? {
+                          backgroundImage: currentSlide.gradient,
+                          backgroundSize: 'contain',
+                          backgroundPosition: 'center',
+                          backgroundRepeat: 'no-repeat'
+                        }
+                      : {}
+                  }
+                >
                   
                   {/* Top slide counts (Non-fullscreen only) */}
                   {!isFullscreen && (
@@ -553,18 +569,27 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
                     </div>
                   )}
 
-                  {/* Body Slide texts */}
-                  <div className={`my-auto py-8 z-10 ${isFullscreen ? 'px-16' : ''}`}>
-                    <h3 className={`font-black tracking-tight leading-tight text-white mb-2 drop-shadow-md ${isFullscreen ? 'text-5xl md:text-7xl mb-4' : 'text-3xl md:text-5xl'}`}>
-                      {currentSlide?.title}
-                    </h3>
-                    <h4 className={`font-medium text-white/80 italic ${isFullscreen ? 'text-2xl mb-8' : 'text-lg md:text-xl mb-6'}`}>
-                      {currentSlide?.subtitle}
-                    </h4>
-                    <p className={`font-light leading-relaxed max-w-4xl bg-black/10 p-5 md:p-8 rounded-2xl backdrop-blur-sm border border-white/5 shadow-lg ${isFullscreen ? 'text-xl md:text-2xl' : 'text-sm md:text-base'}`}>
-                      {currentSlide?.content}
-                    </p>
-                  </div>
+                  {/* Body Slide texts: ONLY render when it's NOT an image slide */}
+                  {!currentSlide?.gradient?.startsWith('url(') && (
+                    <div className={`my-auto py-8 z-10 ${isFullscreen ? 'px-16' : ''}`}>
+                      <h3 className={`font-black tracking-tight leading-tight text-white mb-2 drop-shadow-md ${isFullscreen ? 'text-5xl md:text-7xl mb-4' : 'text-3xl md:text-5xl'}`}>
+                        {currentSlide?.title}
+                      </h3>
+                      <h4 className={`font-medium text-white/80 italic ${isFullscreen ? 'text-2xl mb-8' : 'text-lg md:text-xl mb-6'}`}>
+                        {currentSlide?.subtitle}
+                      </h4>
+                      <p className={`font-light leading-relaxed max-w-4xl bg-black/10 p-5 md:p-8 rounded-2xl backdrop-blur-sm border border-white/5 shadow-lg ${isFullscreen ? 'text-xl md:text-2xl' : 'text-sm md:text-base'}`}>
+                        {currentSlide?.content}
+                      </p>
+                    </div>
+                  )}
+                  
+                  {/* For image slide page markers in fullscreen */}
+                  {currentSlide?.gradient?.startsWith('url(') && isFullscreen && (
+                    <div className="absolute bottom-6 right-6 bg-slate-950/60 border border-white/10 text-white text-xs px-3.5 py-1.5 rounded-full font-bold">
+                      Page {currentSlideIdx + 1} / {slides.length}
+                    </div>
+                  )}
                 </div>
               )}
 

@@ -21,6 +21,27 @@ interface CreatePresentationModalProps {
 
 const BACKEND_URL = '';
 
+/**
+ * Global CDN Script Loader for PDF.js to completely prevent Turbopack bundle compiler failures.
+ */
+const loadPdfJs = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    if ((window as any).pdfjsLib) {
+      resolve((window as any).pdfjsLib);
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js';
+    script.onload = () => {
+      const pdfjsLib = (window as any).pdfjsLib;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+      resolve(pdfjsLib);
+    };
+    script.onerror = (err) => reject(new Error('Failed loading PDF.js engine from CDN.'));
+    document.head.appendChild(script);
+  });
+};
+
 export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = ({
   isOpen,
   onClose,
@@ -77,6 +98,67 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
     setManualSlides(updated);
   };
 
+  // Convert PDF pages to images and upload to Supabase, returning public URLs list
+  const processPdfToImages = async (file: File, onProgress: (progress: number) => void): Promise<string[]> => {
+    const pdfjsLib = await loadPdfJs();
+    const fileReader = new FileReader();
+
+    return new Promise((resolve, reject) => {
+      fileReader.onload = async (ev) => {
+        try {
+          const typedarray = new Uint8Array(ev.target?.result as ArrayBuffer);
+          const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+          const pageUrls: string[] = [];
+          const totalPages = pdf.numPages;
+
+          for (let i = 1; i <= totalPages; i++) {
+            // Processing progress (10% to 80%)
+            onProgress(Math.round(10 + (i / totalPages) * 70));
+
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 2.0 }); // High-res scale factor
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            if (context) {
+              await page.render({ canvasContext: context, viewport: viewport }).promise;
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+              const blob = await (await fetch(dataUrl)).blob();
+
+              const cleanBase = file.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "");
+              const uniquePageName = `${cleanBase}-page-${i}-${Date.now()}-${Math.round(Math.random() * 1e6)}.jpg`;
+
+              const { data: uploadData, error: uploadErr } = await supabase!.storage
+                .from('presentations')
+                .upload(uniquePageName, blob, {
+                  contentType: 'image/jpeg',
+                  cacheControl: '3600',
+                  upsert: false
+                });
+
+              if (uploadErr) {
+                throw new Error(`페이지 ${i} 업로드 실패: ${uploadErr.message}`);
+              }
+
+              const { data: urlData } = supabase!.storage
+                .from('presentations')
+                .getPublicUrl(uniquePageName);
+
+              pageUrls.push(urlData.publicUrl);
+            }
+          }
+          resolve(pageUrls);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      fileReader.onerror = (err) => reject(new Error('파일 읽기 실패.'));
+      fileReader.readAsArrayBuffer(file);
+    });
+  };
+
   // Submission Flow
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,21 +175,15 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
 
         // Upload progress simulation
         setUploadProgress(10);
-        const progressTimer = setInterval(() => {
-          setUploadProgress(prev => (prev < 70 ? prev + 10 : prev));
-        }, 200);
 
         // 1. Auto-create 'presentations' Bucket if not exists in Supabase
         try {
           const { data: buckets, error: listError } = await supabase.storage.listBuckets();
-          if (listError) {
-            console.warn('Failed listing buckets:', listError.message);
-          } else {
+          if (!listError) {
             const hasBucket = buckets.some(b => b.name === 'presentations');
             if (!hasBucket) {
-              console.log("Bucket 'presentations' not found. Auto-creating a public storage bucket...");
-              const { error: createError } = await supabase.storage.createBucket('presentations', {
-                public: true, // Enable public access so MS office viewer can query assets
+              await supabase.storage.createBucket('presentations', {
+                public: true,
                 allowedMimeTypes: [
                   'application/pdf',
                   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -115,91 +191,105 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
                   'image/*'
                 ]
               });
-              if (createError) {
-                console.error('Failed auto-creating bucket presentations:', createError.message);
-              }
             }
           }
         } catch (bucketErr: any) {
-          console.warn('Unexpected storage check warning:', bucketErr.message);
+          console.warn('Bucket setup warning:', bucketErr.message);
         }
 
-        // 2. Direct Upload to Supabase Storage Bucket 'presentations'
         const fileExt = selectedFile.name.split('.').pop()?.toLowerCase();
-        const cleanBaseName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "");
-        const safeBase = cleanBaseName || 'file';
-        const uniqueFileName = `${safeBase}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExt}`;
+        const isPdfFile = fileExt === 'pdf';
+        
+        let slideDataList: any[] = [];
+        let finalFileUrl = '';
 
-        let publicFileUrl = '';
-        try {
-          const { data: uploadData, error: uploadErr } = await supabase.storage
-            .from('presentations')
-            .upload(uniqueFileName, selectedFile, {
-              cacheControl: '3600',
-              upsert: false
+        if (isPdfFile) {
+          // --- PDF Pipeline: Convert pages to high-res JPG files and store as separate slide cards ---
+          setError('PDF 문서를 슬라이드 쇼 용 이미지 카드로 변환 중입니다. 잠시만 기다려주세요...');
+          const pageImageUrls = await processPdfToImages(selectedFile, (progress) => {
+            setUploadProgress(progress);
+          });
+          setError('');
+
+          slideDataList = pageImageUrls.map((url, idx) => ({
+            title: `${idx + 1} 페이지`,
+            subtitle: selectedFile.name,
+            content: '',
+            // Embed URL in gradient field so Viewer can extract and render as full-slide background images
+            gradient: `url(${url})`
+          }));
+          
+          finalFileUrl = pageImageUrls[0] || ''; // Reference starting URL
+        } else {
+          // --- PPTX/Image Pipeline: Single upload to storage bucket ---
+          const cleanBaseName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "");
+          const safeBase = cleanBaseName || 'file';
+          const uniqueFileName = `${safeBase}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExt}`;
+
+          try {
+            const { error: uploadErr } = await supabase.storage
+              .from('presentations')
+              .upload(uniqueFileName, selectedFile, {
+                cacheControl: '3600',
+                upsert: false
+              });
+
+            if (uploadErr) {
+              throw new Error(`업로드 실패: ${uploadErr.message}`);
+            }
+
+            const { data: urlData } = supabase.storage
+              .from('presentations')
+              .getPublicUrl(uniqueFileName);
+
+            finalFileUrl = urlData.publicUrl;
+            setUploadProgress(85);
+
+          } catch (supabaseErr: any) {
+            throw supabaseErr;
+          }
+
+          // Invoke Next.js API /api/upload to parse PPTX files for text backups
+          let uploadData;
+          try {
+            const uploadRes = await fetch(`${BACKEND_URL}/api/upload`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                fileUrl: finalFileUrl,
+                originalName: selectedFile.name,
+                mimeType: selectedFile.type
+              })
             });
 
-          if (uploadErr) {
-            throw new Error(`Supabase 업로드 실패: ${uploadErr.message}`);
+            if (!uploadRes.ok) {
+              throw new Error(`파싱 처리 실패 (서버 응답 코드: ${uploadRes.status})`);
+            }
+
+            uploadData = await uploadRes.json();
+            setUploadProgress(100);
+
+          } catch (uploadErr: any) {
+            throw uploadErr;
           }
 
-          // Retrieve Public URL
-          const { data: urlData } = supabase.storage
-            .from('presentations')
-            .getPublicUrl(uniqueFileName);
-
-          publicFileUrl = urlData.publicUrl;
-          setUploadProgress(85);
-
-        } catch (supabaseErr: any) {
-          clearInterval(progressTimer);
-          throw supabaseErr;
-        }
-
-        // 3. Invoke Next.js API /api/upload to parse PPTX files using URL pointer (Bypasses Vercel 4.5MB Body limits)
-        let uploadData;
-        try {
-          const uploadRes = await fetch(`${BACKEND_URL}/api/upload`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              fileUrl: publicFileUrl,
-              originalName: selectedFile.name,
-              mimeType: selectedFile.type
-            })
-          });
-
-          if (!uploadRes.ok) {
-            clearInterval(progressTimer);
-            throw new Error(`파싱 처리 실패 (서버 응답 코드: ${uploadRes.status})`);
-          }
-
-          uploadData = await uploadRes.json();
-          clearInterval(progressTimer);
-          setUploadProgress(100);
-
-        } catch (uploadErr: any) {
-          clearInterval(progressTimer);
-          throw uploadErr;
+          const hasParsedSlides = uploadData.slides && uploadData.slides.length > 0;
+          slideDataList = hasParsedSlides
+            ? uploadData.slides
+            : [
+                {
+                  title: uploadData.fileUrl,
+                  subtitle: uploadData.originalName,
+                  content: uploadData.mimeType,
+                  gradient: ''
+                }
+              ];
         }
 
         // 4. Create Presentation entry in database
-        const hasParsedSlides = uploadData.slides && uploadData.slides.length > 0;
-        const sourceType = hasParsedSlides ? 'manual' : 'file';
-        const slideDataList = hasParsedSlides
-          ? uploadData.slides
-          : [
-              {
-                title: uploadData.fileUrl,
-                subtitle: uploadData.originalName,
-                content: uploadData.mimeType,
-                gradient: ''
-              }
-            ];
-
         const fileBaseName = selectedFile.name.replace(/\.[^/.]+$/, "");
         const response = await fetch(`${BACKEND_URL}/api/presentations`, {
           method: 'POST',
@@ -209,9 +299,9 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
           },
           body: JSON.stringify({
             title: fileBaseName,
-            source_type: sourceType,
+            source_type: isPdfFile ? 'manual' : 'file', // Treat image slices as manual slideshows
             content_data: slideDataList,
-            file_url: uploadData.fileUrl
+            file_url: finalFileUrl
           })
         });
 
@@ -376,8 +466,10 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
           {/* TAB 1: REAL FILE UPLOAD */}
           {activeTab === 'file' && (
             <div className="space-y-4">
-              <p className="text-xs text-slate-400 leading-relaxed">
-                PDF 문서 혹은 파워포인트 파일(*.pptx, *.ppt)을 업로드하면 웹에서 실물 슬라이드 및 텍스트 교안 형태로 자동 변환 및 즉시 확인이 가능합니다.
+              <p className="text-xs text-slate-400 leading-relaxed text-center">
+                💡 **팁: 파워포인트(PPTX) 파일을 업로드하실 때는 PDF 파일로 저장하여 올려보세요!**<br />
+                PDF 파일로 업로드하시면 각 슬라이드가 선명한 고해상도 이미지 카드로 즉석 변환되어,<br />
+                LUNA 고유의 동적 발표 화면 및 좌우 화살표 페이지 전환과 100% 연동됩니다.
               </p>
               
               <div className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-950/40 cursor-pointer transition relative">
@@ -393,14 +485,14 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
                   {selectedFile ? selectedFile.name : '마우스로 파일을 끌어오거나 클릭하여 선택'}
                 </span>
                 <span className="text-xs text-slate-500">
-                  지원 규격: PDF, PPTX, PPT, 이미지 (최대 50MB - Cloud Storage 직송 우회 적용)
+                  지원 규격: PDF, PPTX, PPT, 이미지 (최대 50MB)
                 </span>
               </div>
 
               {isLoading && uploadProgress > 0 && (
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs text-indigo-400 font-semibold">
-                    <span>클라우드 저장소 업로드 및 파싱 처리 중...</span>
+                    <span>PDF 이미지 슬라이드 변환 및 업로드 중...</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden">
