@@ -126,8 +126,9 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
 
         // 2. Direct Upload to Supabase Storage Bucket 'presentations'
         const fileExt = selectedFile.name.split('.').pop()?.toLowerCase();
-        const cleanBaseName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9가-힣_-]/g, "");
-        const uniqueFileName = `${cleanBaseName}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExt}`;
+        const cleanBaseName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "");
+        const safeBase = cleanBaseName || 'file';
+        const uniqueFileName = `${safeBase}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExt}`;
 
         let publicFileUrl = '';
         try {
