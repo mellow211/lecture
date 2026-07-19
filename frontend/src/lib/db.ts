@@ -3,18 +3,55 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 
-const DB_DIR = path.join(process.cwd(), 'src', 'db');
-const DB_PATH = path.join(DB_DIR, 'lecture.db');
+const isVercel = process.env.VERCEL === '1';
 
-// Ensure database directory exists
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+// Base read-only database location inside packaging
+const PACKAGED_DB_DIR = path.join(process.cwd(), 'src', 'db');
+const PACKAGED_DB_PATH = path.join(PACKAGED_DB_DIR, 'lecture.db');
+
+let DB_PATH = PACKAGED_PATH_resolver();
+
+function PACKAGED_PATH_resolver() {
+  if (isVercel) {
+    // Vercel serverless environment is Read-Only. 
+    // We must clone the packaged DB file to /tmp/ which has write permissions!
+    const tmpDbDir = '/tmp';
+    const tmpDbPath = path.join(tmpDbDir, 'lecture.db');
+    
+    try {
+      if (!fs.existsSync(tmpDbPath)) {
+        console.log('Cloning read-only SQLite database from packaged source to writable /tmp/ ...');
+        // If the database directory inside package doesn't exist, create it to ensure copy works
+        if (!fs.existsSync(PACKAGED_DB_DIR)) {
+          fs.mkdirSync(PACKAGED_DB_DIR, { recursive: true });
+        }
+        
+        // Copy database if exists, or initialize new
+        if (fs.existsSync(PACKAGED_DB_PATH)) {
+          fs.copyFileSync(PACKAGED_DB_PATH, tmpDbPath);
+          console.log('Cloned successfully.');
+        } else {
+          console.log('Packaged database not found. It will be initialized dynamically.');
+        }
+      }
+      return tmpDbPath;
+    } catch (copyErr) {
+      console.error('Failed cloning database to /tmp/:', copyErr);
+      return PACKAGED_DB_PATH;
+    }
+  } else {
+    // For local dev server, write directly to src/db/lecture.db so git staging changes can be committed
+    if (!fs.existsSync(PACKAGED_DB_DIR)) {
+      fs.mkdirSync(PACKAGED_DB_DIR, { recursive: true });
+    }
+    return PACKAGED_DB_PATH;
+  }
 }
 
 // Convert absolute filepath to file:// URL scheme for LibSQL client compatibility
 const dbUrl = `file:${DB_PATH.replace(/\\/g, '/')}`;
 
-console.log('Initializing LibSQL client at:', dbUrl);
+console.log('Initializing LibSQL client at database file:', dbUrl);
 const client = createClient({
   url: dbUrl,
 });
@@ -23,11 +60,9 @@ const client = createClient({
 function rowToObject(row: any, columns: string[]): any {
   const obj: any = {};
   columns.forEach((col, idx) => {
-    // If LibSQL returns rows as positional arrays
     if (Array.isArray(row)) {
       obj[col] = row[idx];
     } else {
-      // If LibSQL returns rows as key-value objects
       obj[col] = row[col];
     }
   });
