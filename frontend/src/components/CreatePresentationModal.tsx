@@ -334,9 +334,9 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
             'Authorization': `Bearer ${token}`
           },
           body: JSON.stringify({
-            title: aiResult.title,
+            title: `${aiTopic} (AI 기획안)`,
             source_type: 'ai',
-            content_data: aiResult.content_data
+            content_data: aiResult
           })
         });
 
