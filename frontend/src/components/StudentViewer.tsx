@@ -1,8 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { StatusIndicator } from './StatusIndicator';
 import { ActiveUser, ConnectionStatus } from '../hooks/useSocket';
-import { SLIDES } from './PresenterDashboard';
-import { Users, BookOpen, LogOut, Check, Copy } from 'lucide-react';
+import { Users, BookOpen, LogOut, Check, Copy, Loader2, HelpCircle } from 'lucide-react';
 import { useAuthStore } from '../store/useAuthStore';
 
 interface StudentViewerProps {
@@ -25,7 +24,36 @@ export const StudentViewer: React.FC<StudentViewerProps> = ({
   socketData,
 }) => {
   const logout = useAuthStore((state) => state.logout);
-  const [copied, setCopied] = React.useState(false);
+  const token = useAuthStore((state) => state.token);
+  const [copied, setCopied] = useState(false);
+
+  // Database presentations state
+  const [presentations, setPresentations] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Fetch real presentation database entries for student syncing
+  useEffect(() => {
+    const fetchPresentations = async () => {
+      if (!token) return;
+      try {
+        const response = await fetch('/api/presentations', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setPresentations(data);
+        }
+      } catch (err) {
+        console.error('Failed fetching presentations for student view:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchPresentations();
+  }, [token]);
 
   const handleCopyCode = () => {
     navigator.clipboard.writeText(roomId);
@@ -33,7 +61,10 @@ export const StudentViewer: React.FC<StudentViewerProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const currentSlideData = SLIDES[socketData.currentSlide] || SLIDES[0];
+  // Resolve active presentation matching the current active lecture roomName
+  const activePresentation = presentations.find(p => p.title === roomName) || presentations[0] || null;
+  const slides = activePresentation?.content_data || [];
+  const currentSlideData = slides[socketData.currentSlide] || slides[0] || null;
 
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
@@ -95,43 +126,75 @@ export const StudentViewer: React.FC<StudentViewerProps> = ({
           </div>
 
           {/* Presentation Slide View (Styled Card) */}
-          <div className="flex-1 min-h-[400px] flex flex-col rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden shadow-2xl relative">
-            <div className={`flex-1 p-8 md:p-12 bg-gradient-to-tr ${currentSlideData.gradient} flex flex-col justify-between transition-all duration-500 relative`}>
-              
-              {/* Slide top badge */}
-              <div className="flex justify-between items-center">
-                <span className="bg-white/10 backdrop-blur text-white px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
-                  Slide {socketData.currentSlide + 1} / {SLIDES.length}
-                </span>
-                <span className="text-white/60 text-xs font-medium">LUNA Presentation Tech</span>
+          <div className="flex-1 min-h-[450px] flex flex-col rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden shadow-2xl relative">
+            {isLoading ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-2">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                <span className="text-xs">실시간 강의 데이터를 불러오는 중입니다...</span>
               </div>
+            ) : !currentSlideData ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-500 p-8 text-center">
+                <HelpCircle className="w-12 h-12 text-slate-700 mb-3" />
+                <h3 className="font-bold text-slate-400">등록된 슬라이드 내용이 없습니다.</h3>
+                <p className="text-xs text-slate-500 mt-1">강사가 교안 설정을 마칠 때까지 기다려 주세요.</p>
+              </div>
+            ) : (
+              <div 
+                className={`flex-1 p-8 md:p-12 flex flex-col justify-between transition-all duration-500 relative ${
+                  currentSlideData.gradient?.startsWith('url(') 
+                    ? 'bg-slate-950' 
+                    : `bg-gradient-to-tr ${currentSlideData.gradient || 'from-indigo-600 to-violet-600'}`
+                }`}
+                style={
+                  currentSlideData.gradient?.startsWith('url(')
+                    ? {
+                        backgroundImage: currentSlideData.gradient,
+                        backgroundSize: 'contain',
+                        backgroundPosition: 'center',
+                        backgroundRepeat: 'no-repeat'
+                      }
+                    : {}
+                }
+              >
+                {/* Slide top badge */}
+                <div className="flex justify-between items-center z-10">
+                  <span className="bg-white/10 backdrop-blur text-white px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider">
+                    Slide {socketData.currentSlide + 1} / {slides.length}
+                  </span>
+                  <span className="text-white/60 text-xs font-medium uppercase tracking-widest text-[10px]">
+                    {activePresentation?.source_type} Mode
+                  </span>
+                </div>
 
-              {/* Slide Body */}
-              <div className="my-auto py-8">
-                <h3 className="text-3xl md:text-5xl font-black tracking-tight leading-tight text-white mb-2 drop-shadow-md">
-                  {currentSlideData.title}
-                </h3>
-                <h4 className="text-lg md:text-xl font-medium text-white/80 mb-6 italic">
-                  {currentSlideData.subtitle}
-                </h4>
-                <p className="text-base md:text-lg text-white/90 font-light leading-relaxed max-w-3xl bg-black/10 p-4 md:p-6 rounded-xl backdrop-blur-sm border border-white/5">
-                  {currentSlideData.content}
-                </p>
-              </div>
+                {/* Slide Body - Render only when it's NOT an image url slide */}
+                {!currentSlideData.gradient?.startsWith('url(') && (
+                  <div className="my-auto py-8 z-10">
+                    <h3 className="text-3xl md:text-5xl font-black tracking-tight leading-tight text-white mb-2 drop-shadow-md">
+                      {currentSlideData.title}
+                    </h3>
+                    <h4 className="text-lg md:text-xl font-medium text-white/80 mb-6 italic">
+                      {currentSlideData.subtitle}
+                    </h4>
+                    <p className="text-base md:text-lg text-white/90 font-light leading-relaxed max-w-3xl bg-black/10 p-4 md:p-6 rounded-xl backdrop-blur-sm border border-white/5 shadow-md">
+                      {currentSlideData.content}
+                    </p>
+                  </div>
+                )}
 
-              {/* Progress bar */}
-              <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/20">
-                <div 
-                  className="h-full bg-white transition-all duration-300 shadow-[0_0_8px_rgba(255,255,255,0.8)]"
-                  style={{ width: `${((socketData.currentSlide + 1) / SLIDES.length) * 100}%` }}
-                />
+                {/* Progress bar */}
+                <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/20 z-10">
+                  <div 
+                    className="h-full bg-emerald-400 transition-all duration-300 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
+                    style={{ width: `${((socketData.currentSlide + 1) / slides.length) * 100}%` }}
+                  />
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Slide Navigation Bar (Read-only for Students) */}
             <div className="p-4 bg-slate-950 flex items-center justify-center border-t border-slate-800">
               <span className="text-sm font-medium text-slate-400">
-                현재 페이지: {socketData.currentSlide + 1} / {SLIDES.length} (강사의 슬라이드 조작에 따라 실시간 전환됩니다)
+                현재 페이지: {socketData.currentSlide + 1} / {slides.length} (강사의 슬라이드 조작에 따라 실시간 전환됩니다)
               </span>
             </div>
           </div>
