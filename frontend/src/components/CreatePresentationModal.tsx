@@ -10,6 +10,7 @@ import {
   Trash2, 
   AlertCircle 
 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
 interface CreatePresentationModalProps {
   isOpen: boolean;
@@ -86,44 +87,78 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
       if (activeTab === 'file') {
         if (!selectedFile) throw new Error('업로드할 파일을 선택해 주세요.');
 
-        // Build FormData
-        const formData = new FormData();
-        formData.append('file', selectedFile);
+        if (!supabase) {
+          throw new Error('Supabase Storage 클라이언트가 연동되지 않았습니다. .env.local 설정을 완료해 주세요.');
+        }
 
-        // Upload Progress Animation simulation during upload fetch
-        setUploadProgress(15);
+        // Upload progress simulation
+        setUploadProgress(10);
         const progressTimer = setInterval(() => {
-          setUploadProgress(prev => (prev < 90 ? prev + 10 : prev));
-        }, 150);
+          setUploadProgress(prev => (prev < 80 ? prev + 15 : prev));
+        }, 200);
 
+        // 1. Direct Upload to Supabase Storage Bucket 'presentations'
+        const fileExt = selectedFile.name.split('.').pop()?.toLowerCase();
+        const cleanBaseName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9가-힣_-]/g, "");
+        const uniqueFileName = `${cleanBaseName}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExt}`;
+
+        let publicFileUrl = '';
+        try {
+          const { data: uploadData, error: uploadErr } = await supabase.storage
+            .from('presentations')
+            .upload(uniqueFileName, selectedFile, {
+              cacheControl: '3600',
+              upsert: false
+            });
+
+          if (uploadErr) {
+            throw new Error(`Supabase 업로드 실패: ${uploadErr.message}`);
+          }
+
+          // Retrieve Public URL
+          const { data: urlData } = supabase.storage
+            .from('presentations')
+            .getPublicUrl(uniqueFileName);
+
+          publicFileUrl = urlData.publicUrl;
+          setUploadProgress(85);
+
+        } catch (supabaseErr: any) {
+          clearInterval(progressTimer);
+          throw supabaseErr;
+        }
+
+        // 2. Invoke Next.js API /api/upload to parse PPTX files using URL pointer (Bypasses Vercel 4.5MB Body limits)
         let uploadData;
         try {
           const uploadRes = await fetch(`${BACKEND_URL}/api/upload`, {
             method: 'POST',
             headers: {
+              'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`
             },
-            body: formData
+            body: JSON.stringify({
+              fileUrl: publicFileUrl,
+              originalName: selectedFile.name,
+              mimeType: selectedFile.type
+            })
           });
 
-          // Pre-check HTTP status to prevent JSON parsing crashes on non-JSON payload errors (e.g. 413)
           if (!uploadRes.ok) {
             clearInterval(progressTimer);
-            if (uploadRes.status === 413) {
-              throw new Error('파일 용량이 Vercel 배포 한도(4.5MB)를 초과했습니다. 용량이 더 큰 파일은 로컬 개발 환경에서 등록 후 깃허브에 push하여 배포해 주세요!');
-            }
-            throw new Error(`업로드 실패 (서버 응답 코드: ${uploadRes.status})`);
+            throw new Error(`파싱 처리 실패 (서버 응답 코드: ${uploadRes.status})`);
           }
 
           uploadData = await uploadRes.json();
           clearInterval(progressTimer);
           setUploadProgress(100);
+
         } catch (uploadErr: any) {
           clearInterval(progressTimer);
           throw uploadErr;
         }
 
-        // Check if server returned parsed slide card list (e.g. for PPTX files)
+        // 3. Create Presentation meta entry in SQLite
         const hasParsedSlides = uploadData.slides && uploadData.slides.length > 0;
         const sourceType = hasParsedSlides ? 'manual' : 'file';
         const slideDataList = hasParsedSlides
@@ -314,7 +349,7 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
           {activeTab === 'file' && (
             <div className="space-y-4">
               <p className="text-xs text-slate-400 leading-relaxed">
-                PDF 문서 혹은 이미지 파일(*.png, *.jpg 등)을 업로드하면 프레젠테이션 영역에 **파일 그대로** 표시됩니다.
+                PDF 문서 혹은 파워포인트 파일(*.pptx, *.ppt)을 업로드하면 웹에서 실물 슬라이드 및 텍스트 교안 형태로 자동 변환 및 즉시 확인이 가능합니다.
               </p>
               
               <div className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-950/40 cursor-pointer transition relative">
@@ -330,14 +365,14 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
                   {selectedFile ? selectedFile.name : '마우스로 파일을 끌어오거나 클릭하여 선택'}
                 </span>
                 <span className="text-xs text-slate-500">
-                  지원 규격: PDF, PNG, JPG, GIF (최대 20MB)
+                  지원 규격: PDF, PPTX, PPT, 이미지 (최대 50MB - Cloud Storage 직송 우회 적용)
                 </span>
               </div>
 
               {isLoading && uploadProgress > 0 && (
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs text-indigo-400 font-semibold">
-                    <span>파일 업로드 및 처리 중...</span>
+                    <span>클라우드 저장소 업로드 및 파싱 처리 중...</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <div className="w-full bg-slate-950 h-2 rounded-full overflow-hidden">
