@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../store/useAuthStore';
 import { Presentation, Shield, User as UserIcon, Lock, Loader2 } from 'lucide-react';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+const BACKEND_URL = '';
 
 export default function LoginPage() {
   const router = useRouter();

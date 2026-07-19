@@ -42,7 +42,7 @@ interface PresentationViewerProps {
   onUpdateSuccess: (updatedItem: any) => void; // Callback to refresh sidebar list in parent
 }
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
+const BACKEND_URL = '';
 
 export const PresentationViewer: React.FC<PresentationViewerProps> = ({
   presentation,
@@ -254,7 +254,13 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
     } 
     
     if (lowerUrl.endsWith('.pptx') || lowerUrl.endsWith('.ppt')) {
-      const isLocal = url.includes('localhost') || url.includes('127.0.0.1');
+      let targetUrl = url;
+      if (url.startsWith('/')) {
+        // If relative URL, map current location origin to make it absolute for Office Viewer API
+        targetUrl = window.location.origin + url;
+      }
+
+      const isLocal = targetUrl.includes('localhost') || targetUrl.includes('127.0.0.1');
       if (isLocal) {
         return (
           <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-slate-900/60 rounded-xl border border-slate-800">
@@ -273,7 +279,7 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
         );
       }
       
-      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`;
+      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(targetUrl)}`;
       return (
         <iframe 
           src={officeViewerUrl} 
