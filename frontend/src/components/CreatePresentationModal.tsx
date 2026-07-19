@@ -314,7 +314,7 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
               <div className="border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-950/40 cursor-pointer transition relative">
                 <input
                   type="file"
-                  accept=".pdf,.pptx,image/*"
+                  accept=".pdf,.pptx,.ppt,image/*"
                   onChange={(e) => setSelectedFile(e.target.files ? e.target.files[0] : null)}
                   className="absolute inset-0 opacity-0 cursor-pointer"
                   disabled={isLoading}
