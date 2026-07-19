@@ -1,4 +1,4 @@
-import sqlite3 from 'sqlite3';
+import { createClient } from '@libsql/client';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -11,42 +11,43 @@ if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
 }
 
-// Initialize SQLite Database Connection
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) {
-    console.error('Failed to connect to SQLite database:', err);
-  } else {
-    console.log('Connected to the Next.js SQLite database at:', DB_PATH);
-    initDatabaseSchema();
-  }
+// Convert absolute filepath to file:// URL scheme for LibSQL client compatibility
+const dbUrl = `file:${DB_PATH.replace(/\\/g, '/')}`;
+
+console.log('Initializing LibSQL client at:', dbUrl);
+const client = createClient({
+  url: dbUrl,
 });
 
-// Promise wrapper helper utilities
-export function dbRun(query: string, params: any[] = []): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.run(query, params, function (err) {
-      if (err) reject(err);
-      else resolve();
-    });
+// Row mapper helper to match sqlite3 object formatting
+function rowToObject(row: any, columns: string[]): any {
+  const obj: any = {};
+  columns.forEach((col, idx) => {
+    // If LibSQL returns rows as positional arrays
+    if (Array.isArray(row)) {
+      obj[col] = row[idx];
+    } else {
+      // If LibSQL returns rows as key-value objects
+      obj[col] = row[col];
+    }
   });
+  return obj;
 }
 
-export function dbGet(query: string, params: any[] = []): Promise<any> {
-  return new Promise((resolve, reject) => {
-    db.get(query, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
-    });
-  });
+// Promise wrapper helper utilities (libsql implementation)
+export async function dbRun(query: string, params: any[] = []): Promise<void> {
+  await client.execute({ sql: query, args: params });
 }
 
-export function dbAll(query: string, params: any[] = []): Promise<any[]> {
-  return new Promise((resolve, reject) => {
-    db.all(query, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
-    });
-  });
+export async function dbGet(query: string, params: any[] = []): Promise<any> {
+  const res = await client.execute({ sql: query, args: params });
+  if (res.rows.length === 0) return null;
+  return rowToObject(res.rows[0], res.columns);
+}
+
+export async function dbAll(query: string, params: any[] = []): Promise<any[]> {
+  const res = await client.execute({ sql: query, args: params });
+  return res.rows.map(row => rowToObject(row, res.columns));
 }
 
 /**
@@ -60,7 +61,7 @@ async function initDatabaseSchema() {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('presenter', 'student')),
+        role TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -70,7 +71,7 @@ async function initDatabaseSchema() {
       CREATE TABLE IF NOT EXISTS presentations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
-        source_type TEXT NOT NULL CHECK(source_type IN ('file', 'ai', 'manual')),
+        source_type TEXT NOT NULL,
         content_data TEXT NOT NULL,
         file_url TEXT,
         order_index INTEGER DEFAULT 0,
@@ -88,10 +89,13 @@ async function initDatabaseSchema() {
       );
       console.log('Seeded default admin user: admin / admin123');
     }
-    console.log('Next.js SQLite database tables initialized and seeded successfully.');
+    console.log('Next.js LibSQL database initialized and seeded successfully.');
   } catch (err) {
     console.error('Failed to initialize database tables:', err);
   }
 }
 
-export default db;
+// Automatically trigger initialization
+initDatabaseSchema();
+
+export default client;
