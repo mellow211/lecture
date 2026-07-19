@@ -73,7 +73,7 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
   useEffect(() => {
     if (presentation) {
       setEditedSlides(presentation.content_data);
-      // Auto toggle to 'file' view if source_type is file (PDF/Image)
+      // Auto toggle to 'file' view if source_type is file (PDF/Image/PPTX)
       if (presentation.source_type === 'file') {
         setViewMode('file');
       } else {
@@ -241,12 +241,27 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
     return ext && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext);
   };
 
+  /**
+   * Smart CDN Resolver to allow Microsoft Office Viewer and PDF viewers to fetch file uploads 
+   * directly from the public GitHub repository main branch, bypassing local Vercel temporary file filesystem constraints.
+   */
+  const getAbsoluteFileUrl = (url: string) => {
+    if (!url) return '';
+    if (url.startsWith('/uploads/')) {
+      // Direct integration mapping to Github raw static files for public MS Viewer access
+      return `https://raw.githubusercontent.com/mellow211/lecture/main/frontend/public${url}`;
+    }
+    return url;
+  };
+
   const renderFileView = (url: string) => {
-    const lowerUrl = url.toLowerCase();
+    const absoluteUrl = getAbsoluteFileUrl(url);
+    const lowerUrl = absoluteUrl.toLowerCase();
+
     if (isPDF(lowerUrl)) {
       return (
         <iframe 
-          src={`${url}#toolbar=0`} 
+          src={`${absoluteUrl}#toolbar=0`} 
           className="w-full h-full border-none rounded-xl bg-slate-900 shadow-inner" 
           title="PDF Viewer" 
         />
@@ -254,32 +269,7 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
     } 
     
     if (lowerUrl.endsWith('.pptx') || lowerUrl.endsWith('.ppt')) {
-      let targetUrl = url;
-      if (url.startsWith('/')) {
-        // If relative URL, map current location origin to make it absolute for Office Viewer API
-        targetUrl = window.location.origin + url;
-      }
-
-      const isLocal = targetUrl.includes('localhost') || targetUrl.includes('127.0.0.1');
-      if (isLocal) {
-        return (
-          <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-slate-900/60 rounded-xl border border-slate-800">
-            <p className="text-sm font-bold text-amber-400 mb-2">⚠️ 로컬 파일 접근 제한 안내</p>
-            <p className="text-xs text-slate-400 max-w-sm mb-4 leading-relaxed">
-              마이크로소프트 오피스 온라인 뷰어 API는 인터넷상에 공개 배포된 파일 URL만 렌더링할 수 있습니다. 
-              최종 깃허브 배포 및 Vercel(웹) 연동 시에는 원본 파워포인트 그림 형태 그대로 깔끔히 출력됩니다!
-            </p>
-            <button
-              onClick={() => setViewMode('cards')}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-lg transition"
-            >
-              로컬용 카드 뷰로 교안 확인
-            </button>
-          </div>
-        );
-      }
-      
-      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(targetUrl)}`;
+      const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(absoluteUrl)}`;
       return (
         <iframe 
           src={officeViewerUrl} 
@@ -293,7 +283,7 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
       return (
         <div className="w-full h-full flex items-center justify-center bg-slate-950/20 p-2">
           <img 
-            src={url} 
+            src={absoluteUrl} 
             alt="Uploaded Slide Document" 
             className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" 
           />
@@ -305,7 +295,7 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
       <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-slate-900 rounded-xl">
         <p className="text-sm font-semibold text-white mb-2">미리보기를 지원하지 않는 파일 형식입니다.</p>
         <a 
-          href={url} 
+          href={absoluteUrl} 
           target="_blank" 
           rel="noopener noreferrer" 
           className="text-xs text-indigo-400 underline hover:text-indigo-300"
@@ -543,7 +533,7 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
             <div className={`flex-1 overflow-hidden relative flex flex-col justify-between ${isFullscreen ? 'h-screen w-screen p-0' : 'rounded-2xl border border-slate-900 bg-slate-950 shadow-2xl'}`}>
               
               {viewMode === 'file' && presentation.file_url ? (
-                /* FILE MODE: Render PDF/Image/PPTX native file embed */
+                /* FILE MODE: Render PDF/Image/PPTX native file embed via Github Raw Proxy */
                 <div className="w-full h-full flex-1 overflow-hidden relative">
                   {renderFileView(presentation.file_url)}
                 </div>
