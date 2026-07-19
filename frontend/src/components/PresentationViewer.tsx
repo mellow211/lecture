@@ -73,8 +73,8 @@ export const PresentationViewer: React.FC<PresentationViewerProps> = ({
   useEffect(() => {
     if (presentation) {
       setEditedSlides(presentation.content_data);
-      // Auto toggle to 'file' view if source_type is file (PDF/Image/PPTX)
-      if (presentation.source_type === 'file') {
+      // Auto toggle to 'file' view if a physical document URL (file_url) exists, bypassing card view default
+      if (presentation.file_url) {
         setViewMode('file');
       } else {
         setViewMode('cards');
