@@ -105,13 +105,19 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
             },
             body: formData
           });
+
+          // Pre-check HTTP status to prevent JSON parsing crashes on non-JSON payload errors (e.g. 413)
+          if (!uploadRes.ok) {
+            clearInterval(progressTimer);
+            if (uploadRes.status === 413) {
+              throw new Error('파일 용량이 Vercel 배포 한도(4.5MB)를 초과했습니다. 용량이 더 큰 파일은 로컬 개발 환경에서 등록 후 깃허브에 push하여 배포해 주세요!');
+            }
+            throw new Error(`업로드 실패 (서버 응답 코드: ${uploadRes.status})`);
+          }
+
           uploadData = await uploadRes.json();
           clearInterval(progressTimer);
           setUploadProgress(100);
-
-          if (!uploadRes.ok) {
-            throw new Error(uploadData.error || '파일 업로드에 실패했습니다.');
-          }
         } catch (uploadErr: any) {
           clearInterval(progressTimer);
           throw uploadErr;
