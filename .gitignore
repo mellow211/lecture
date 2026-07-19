@@ -1,0 +1,32 @@
+# Node.js dependencies
+**/node_modules/
+**/npm-debug.log*
+
+# Next.js build outputs
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# SQLite databases
+backend/*.db
+backend/*.db-journal
+
+# Local Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+
+# Multer uploads directory (Keep uploads folder empty in git repository)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# IDEs and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.sln
