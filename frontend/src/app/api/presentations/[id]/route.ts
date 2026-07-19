@@ -11,8 +11,13 @@ export async function PUT(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: presentationId } = await context.params;
+    const rawId = (await context.params).id;
+    const presentationId = parseInt(rawId, 10);
     
+    if (isNaN(presentationId)) {
+      return NextResponse.json({ error: 'Invalid presentation ID format.' }, { status: 400 });
+    }
+
     const user = authenticateRequest(req);
     if (!user || user.role !== 'presenter') {
       return NextResponse.json({ error: 'Only presenters can edit presentations.' }, { status: 403 });
@@ -59,7 +64,12 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id: presentationId } = await context.params;
+    const rawId = (await context.params).id;
+    const presentationId = parseInt(rawId, 10);
+
+    if (isNaN(presentationId)) {
+      return NextResponse.json({ error: 'Invalid presentation ID format.' }, { status: 400 });
+    }
 
     const user = authenticateRequest(req);
     if (!user || user.role !== 'presenter') {

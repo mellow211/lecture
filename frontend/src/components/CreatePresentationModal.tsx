@@ -94,10 +94,37 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
         // Upload progress simulation
         setUploadProgress(10);
         const progressTimer = setInterval(() => {
-          setUploadProgress(prev => (prev < 80 ? prev + 15 : prev));
+          setUploadProgress(prev => (prev < 70 ? prev + 10 : prev));
         }, 200);
 
-        // 1. Direct Upload to Supabase Storage Bucket 'presentations'
+        // 1. Auto-create 'presentations' Bucket if not exists in Supabase
+        try {
+          const { data: buckets, error: listError } = await supabase.storage.listBuckets();
+          if (listError) {
+            console.warn('Failed listing buckets:', listError.message);
+          } else {
+            const hasBucket = buckets.some(b => b.name === 'presentations');
+            if (!hasBucket) {
+              console.log("Bucket 'presentations' not found. Auto-creating a public storage bucket...");
+              const { error: createError } = await supabase.storage.createBucket('presentations', {
+                public: true, // Enable public access so MS office viewer can query assets
+                allowedMimeTypes: [
+                  'application/pdf',
+                  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+                  'application/vnd.ms-powerpoint',
+                  'image/*'
+                ]
+              });
+              if (createError) {
+                console.error('Failed auto-creating bucket presentations:', createError.message);
+              }
+            }
+          }
+        } catch (bucketErr: any) {
+          console.warn('Unexpected storage check warning:', bucketErr.message);
+        }
+
+        // 2. Direct Upload to Supabase Storage Bucket 'presentations'
         const fileExt = selectedFile.name.split('.').pop()?.toLowerCase();
         const cleanBaseName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9가-힣_-]/g, "");
         const uniqueFileName = `${cleanBaseName}-${Date.now()}-${Math.round(Math.random() * 1e9)}.${fileExt}`;
@@ -128,7 +155,7 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
           throw supabaseErr;
         }
 
-        // 2. Invoke Next.js API /api/upload to parse PPTX files using URL pointer (Bypasses Vercel 4.5MB Body limits)
+        // 3. Invoke Next.js API /api/upload to parse PPTX files using URL pointer (Bypasses Vercel 4.5MB Body limits)
         let uploadData;
         try {
           const uploadRes = await fetch(`${BACKEND_URL}/api/upload`, {
@@ -158,7 +185,7 @@ export const CreatePresentationModal: React.FC<CreatePresentationModalProps> = (
           throw uploadErr;
         }
 
-        // 3. Create Presentation meta entry in SQLite
+        // 4. Create Presentation entry in database
         const hasParsedSlides = uploadData.slides && uploadData.slides.length > 0;
         const sourceType = hasParsedSlides ? 'manual' : 'file';
         const slideDataList = hasParsedSlides
